@@ -1,0 +1,5 @@
+protocol: https
+host: your-server.com
+baseDir: /remote.php/webdav/
+user: <username>
+pass: <password>
