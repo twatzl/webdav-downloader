@@ -13,7 +13,6 @@ import (
 
 var cfgFile string
 var server string
-var directory string
 
 var rootCmd = &cobra.Command{
 	Use:   "webdav-downloader",
@@ -21,10 +20,13 @@ var rootCmd = &cobra.Command{
 	Long:  `TODO`,
 	Run: func(cmd *cobra.Command, args []string) {
 
+		remoteDir := viper.GetString("remoteDir")
+
 		cfg := downloader.Config{
 			Protocol: viper.GetString("protocol"),
 			Host:     viper.GetString("host"),
 			BaseDir:  viper.GetString("baseDir"),
+			LocalDir: viper.GetString("localDir"),
 			User:     viper.GetString("user"),
 			Pass:     viper.GetString("pass"),
 		}
@@ -37,7 +39,7 @@ var rootCmd = &cobra.Command{
 			log.Fatal("protocol must be http or https")
 		}
 
-		downloader.DownloadDir(&cfg, directory)
+		downloader.DownloadDir(&cfg, remoteDir)
 	},
 }
 
@@ -52,17 +54,22 @@ func init() {
 	const PROTOCOL = "protocol"
 	const HOST = "host"
 	const BASE_DIR = "baseDir"
+	const REMOTE_DIR = "remoteDir"
+	const LOCAL_DIR = "localDir"
 
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.webdav-downloader.yaml)")
 	rootCmd.PersistentFlags().StringP(PROTOCOL, "", "http", "protocol to use")
 	rootCmd.PersistentFlags().StringP(HOST, "", "", "webdav host")
 	rootCmd.PersistentFlags().StringP(BASE_DIR, "", "", "base dir (e.g. /remote.php/webdav)")
-	rootCmd.PersistentFlags().StringVar(&directory, "directory", "", "directory to download on the server")
+	rootCmd.PersistentFlags().StringP(REMOTE_DIR, "", "", "path which will be appended to the remote path (e.g. /some/dir)")
+	rootCmd.PersistentFlags().StringP(LOCAL_DIR, "", "", "path which will be used on the local machine (e.g. /some/other/dir)")
 
 	_ = viper.BindPFlag(PROTOCOL, rootCmd.PersistentFlags().Lookup(PROTOCOL))
 	_ = viper.BindPFlag(HOST, rootCmd.PersistentFlags().Lookup(HOST))
 	_ = viper.BindPFlag(BASE_DIR, rootCmd.PersistentFlags().Lookup(BASE_DIR))
+	_ = viper.BindPFlag(REMOTE_DIR, rootCmd.PersistentFlags().Lookup(REMOTE_DIR))
+	_ = viper.BindPFlag(LOCAL_DIR, rootCmd.PersistentFlags().Lookup(LOCAL_DIR))
 
 }
 

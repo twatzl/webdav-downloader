@@ -14,29 +14,39 @@ import (
 )
 
 type webdavDownloader struct {
-	logger *logrus.Logger
-	client *http.Client
-	cfg    *Config
+	logger    *logrus.Logger
+	client    *http.Client
+	cfg       *Config
+	remoteDir string
 }
 
-func DownloadDir(conf *Config, directory string) {
+// DownloadDir will download the files and folders at remoteDir recursively.
+// remoteDir is a relative path to the remote folder
+func DownloadDir(conf *Config, remoteDir string) {
 	w := webdavDownloader{
-		logger: logrus.StandardLogger(),
-		client: &http.Client{},
-		cfg:    conf,
+		logger:    logrus.StandardLogger(),
+		client:    &http.Client{},
+		cfg:       conf,
+		remoteDir: remoteDir,
 	}
 
 	//testConnection(logger, server, user, password, client)
 
-	localDirs := []string{directory}
-	dirsToSearch := []string{directory}
+	var localDirs []string
+	dirsToSearch := []string{remoteDir}
 	var filesFound []string
 
+	// list remote directories
 	for len(dirsToSearch) > 0 {
 		currentDir := dirsToSearch[0]
 		dirsToSearch = dirsToSearch[1:]
 
 		dirsFound, files := w.listDirectory(currentDir)
+		if dirsFound == nil && files == nil {
+			// TODO: maybe log error here
+			continue
+		}
+
 		dirsToSearch = append(dirsToSearch, dirsFound...)
 		localDirs = append(localDirs, dirsFound...)
 		filesFound = append(filesFound, files...)
@@ -44,11 +54,17 @@ func DownloadDir(conf *Config, directory string) {
 
 	w.logger.WithField("filesFound", len(filesFound)).Infoln()
 
+	// create dirs
 	for _, dir := range localDirs {
-		dir = strings.Trim(dir, "/")
-		err := os.Mkdir(dir, 0755)
+		dir = w.remotePathToLocalPath(dir)
+		if dir == "" || dir == w.cfg.LocalDir {
+			continue
+		}
+
+		err := os.MkdirAll(dir, 0755)
 		if err != nil {
 			if os.IsExist(err) {
+				w.logger.WithError(err).Info("directory exists")
 				continue
 			}
 			w.logger.WithError(err).Fatal("could not create local dirs")
@@ -59,10 +75,6 @@ func DownloadDir(conf *Config, directory string) {
 		w.downloadResource(file)
 	}
 
-}
-
-func (w *webdavDownloader) getBaseUrl() string {
-	return w.cfg.Protocol + "://" + path.Join(w.cfg.Host, w.cfg.BaseDir) + "/"
 }
 
 func (w *webdavDownloader) authenticateRequest(req *http.Request) {
@@ -162,7 +174,9 @@ func (w *webdavDownloader) downloadResource(resourcePath string) {
 		w.logger.WithError(err).WithField("resource", resourcePath).Errorln("error while reading response body for resource")
 	}
 
-	err = ioutil.WriteFile(resourcePath, data, 0755)
+	localPath := w.remotePathToLocalPath(resourcePath)
+	// TODO: add here checks for delta download
+	err = ioutil.WriteFile(localPath, data, 0755)
 	if err != nil {
 		w.logger.WithError(err).WithField("resource", resourcePath).Errorln("error while writing downloaded file")
 	}
@@ -176,6 +190,17 @@ func (w *webdavDownloader) getDirectoryUrl(directory string) string {
 
 func (w *webdavDownloader) logRequest(request *http.Request) {
 	w.logger.WithField("url", request.URL).Infoln("sending request")
+}
+
+func (w *webdavDownloader) getLocalDir(dir string) string {
+	return path.Join(w.cfg.LocalDir, dir)
+}
+
+func (w *webdavDownloader) remotePathToLocalPath(dir string) string {
+	dir = strings.TrimPrefix(dir, w.remoteDir) // remove base path
+	dir = strings.Trim(dir, "/") // remove remaining slashes
+	dir = path.Join(w.cfg.LocalDir, dir) // add local dir
+	return dir
 }
 
 func testConnection(logger *logrus.Logger, server string, user string, password string, client *http.Client) {
