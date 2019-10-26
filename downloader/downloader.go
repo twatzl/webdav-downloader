@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"github.com/twatzl/webdav-downloader/webdav"
 	"io/ioutil"
@@ -57,6 +58,8 @@ func DownloadDir(conf *Config, remoteDir string) {
 	}
 
 	w.logger.WithField("filesFound", len(filesFound)).Infoln()
+
+	localDirs = append(localDirs, ".")
 
 	// create dirs
 	for _, dir := range localDirs {
@@ -126,6 +129,9 @@ func (w *webdavDownloader) crawlFilesInDir(directory string) (dirs, files []stri
 		w.logger.WithError(err).Errorln("error decoding xml response from server")
 	}
 
+	dirs = []string{}
+	files = []string{}
+
 	// process responses
 	for _, resp := range webdavMultistatus.Responses {
 		resourcePath, err := url.PathUnescape(resp.Href)
@@ -156,7 +162,6 @@ func (w *webdavDownloader) crawlFilesInDir(directory string) (dirs, files []stri
 			dirs = append(dirs, resourcePath)
 		}
 	}
-
 	w.logger.Infoln(dirs)
 
 	return dirs, files
@@ -175,15 +180,16 @@ func (w *webdavDownloader) shouldSkipFileInDeltaMode(localPath string, resp webd
 			w.logger.WithField("localPath", localPath).Infoln("delta mode: skipped file. reason: file exists.")
 			return true
 		}
-		if w.cfg.DeltaFlags[DELTA_FLAG_SIZE] && info.Size() != resp.Props.Prop.ContentLength {
+		if w.cfg.DeltaFlags[DELTA_FLAG_SIZE] && info.Size() == resp.Props.Prop.ContentLength {
 			reasons = append(reasons, DELTA_FLAG_SIZE)
 		}
-		if w.cfg.DeltaFlags[DELTA_FLAG_DATE] && info.ModTime() != resp.Props.Prop.GetLastModifiedTime() {
-			reasons = append(reasons, DELTA_FLAG_SIZE)
+		if w.cfg.DeltaFlags[DELTA_FLAG_DATE] && info.ModTime() == resp.Props.Prop.GetLastModifiedTime() {
+			reasons = append(reasons, DELTA_FLAG_DATE)
 		}
 
 		if len(reasons) > 0 {
-			w.logger.WithField("localPath", localPath).Infoln("delta mode: skipped file. reasons: [%s]\n", strings.Join(reasons, ","))
+			message := fmt.Sprintf("delta mode: skipped file. reasons: [%s]\n", strings.Join(reasons, ","))
+			w.logger.WithField("localPath", localPath).Infoln(message)
 			return true
 		}
 	}
@@ -214,7 +220,6 @@ func (w *webdavDownloader) downloadResource(resourcePath string) {
 		w.logger.WithError(err).WithField("resource", resourcePath).Errorln("error while reading response body for resource")
 	}
 
-	// TODO: add here checks for delta download
 	err = ioutil.WriteFile(localPath, data, 0755)
 	if err != nil {
 		w.logger.WithError(err).WithField("resource", resourcePath).Errorln("error while writing downloaded file")
