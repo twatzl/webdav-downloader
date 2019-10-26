@@ -13,6 +13,9 @@ import (
 	"strings"
 )
 
+const DELTA_FLAG_SIZE = "SIZE"
+const DELTA_FLAG_DATE = "DATE"
+
 type webdavDownloader struct {
 	logger    *logrus.Logger
 	client    *http.Client
@@ -30,6 +33,7 @@ func DownloadDir(conf *Config, remoteDir string) {
 		remoteDir: remoteDir,
 	}
 
+	//w.logger.SetLevel(logrus.DebugLevel)
 	//testConnection(logger, server, user, password, client)
 
 	var localDirs []string
@@ -41,7 +45,7 @@ func DownloadDir(conf *Config, remoteDir string) {
 		currentDir := dirsToSearch[0]
 		dirsToSearch = dirsToSearch[1:]
 
-		dirsFound, files := w.listDirectory(currentDir)
+		dirsFound, files := w.crawlFilesInDir(currentDir)
 		if dirsFound == nil && files == nil {
 			// TODO: maybe log error here
 			continue
@@ -81,7 +85,7 @@ func (w *webdavDownloader) authenticateRequest(req *http.Request) {
 	req.SetBasicAuth(w.cfg.User, w.cfg.Pass)
 }
 
-func (w *webdavDownloader) listDirectory(directory string) (dirs, files []string) {
+func (w *webdavDownloader) crawlFilesInDir(directory string) (dirs, files []string) {
 	directoryUrl := w.getDirectoryUrl(directory)
 	req, err := http.NewRequest("PROPFIND", directoryUrl, bytes.NewReader([]byte{}))
 	if err != nil {
@@ -124,26 +128,32 @@ func (w *webdavDownloader) listDirectory(directory string) (dirs, files []string
 
 	// process responses
 	for _, resp := range webdavMultistatus.Responses {
-		dirPath, err := url.PathUnescape(resp.Href)
+		resourcePath, err := url.PathUnescape(resp.Href)
 		if err != nil {
 			w.logger.WithField("path", resp.Href).WithError(err).Errorln("could not decode path")
 			continue
 		}
-		dirPath = strings.Trim(dirPath, "/")
+		resourcePath = strings.Trim(resourcePath, "/")
 		baseDir := strings.Trim(w.cfg.BaseDir, "/")
-		dirPath = strings.TrimPrefix(dirPath, baseDir)
-		dirPath = strings.Trim(dirPath, "/")
+		resourcePath = strings.TrimPrefix(resourcePath, baseDir)
+		resourcePath = strings.Trim(resourcePath, "/")
 
 		// for some reason the response also gives us the directory itself
 		// we have to filter it out
-		if strings.HasSuffix(dirPath, directory) {
+		if strings.HasSuffix(resourcePath, directory) {
 			continue
 		}
 
 		if resp.Props.Prop.ResourceType.Collection == nil {
-			files = append(files, dirPath)
+			localPath := w.remotePathToLocalPath(resourcePath)
+			skip := w.shouldSkipFileInDeltaMode(localPath, resp)
+			if skip {
+				continue
+			}
+
+			files = append(files, resourcePath)
 		} else {
-			dirs = append(dirs, dirPath)
+			dirs = append(dirs, resourcePath)
 		}
 	}
 
@@ -152,8 +162,38 @@ func (w *webdavDownloader) listDirectory(directory string) (dirs, files []string
 	return dirs, files
 }
 
+func (w *webdavDownloader) shouldSkipFileInDeltaMode(localPath string, resp webdav.Response) bool {
+	info, err := os.Stat(localPath)
+
+	if os.IsNotExist(err) {
+		return false
+	}
+
+	if w.cfg.DeltaMode {
+		var reasons []string
+		if len(w.cfg.DeltaFlags) == 0 {
+			w.logger.WithField("localPath", localPath).Infoln("delta mode: skipped file. reason: file exists.")
+			return true
+		}
+		if w.cfg.DeltaFlags[DELTA_FLAG_SIZE] && info.Size() != resp.Props.Prop.ContentLength {
+			reasons = append(reasons, DELTA_FLAG_SIZE)
+		}
+		if w.cfg.DeltaFlags[DELTA_FLAG_DATE] && info.ModTime() != resp.Props.Prop.GetLastModifiedTime() {
+			reasons = append(reasons, DELTA_FLAG_SIZE)
+		}
+
+		if len(reasons) > 0 {
+			w.logger.WithField("localPath", localPath).Infoln("delta mode: skipped file. reasons: [%s]\n", strings.Join(reasons, ","))
+			return true
+		}
+	}
+	return false
+}
+
 func (w *webdavDownloader) downloadResource(resourcePath string) {
 	url := w.getDirectoryUrl(resourcePath)
+	localPath := w.remotePathToLocalPath(resourcePath)
+
 	req, err := http.NewRequest(http.MethodGet, url, bytes.NewReader([]byte{}))
 	if err != nil {
 		w.logger.Fatal(err)
@@ -174,7 +214,6 @@ func (w *webdavDownloader) downloadResource(resourcePath string) {
 		w.logger.WithError(err).WithField("resource", resourcePath).Errorln("error while reading response body for resource")
 	}
 
-	localPath := w.remotePathToLocalPath(resourcePath)
 	// TODO: add here checks for delta download
 	err = ioutil.WriteFile(localPath, data, 0755)
 	if err != nil {
